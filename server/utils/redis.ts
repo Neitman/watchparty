@@ -4,7 +4,21 @@ import { getStartOfHour } from "./time.ts";
 
 export let redis: Redis | undefined = undefined;
 if (config.REDIS_URL) {
-  redis = new Redis(config.REDIS_URL);
+  try {
+    const redisClient = new Redis(config.REDIS_URL, {
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 1,
+      retryStrategy(times) {
+        return Math.min(times * 500, 3000);
+      },
+    });
+    redisClient.on("error", (err) => {
+      console.warn("Redis connection error:", err.message);
+    });
+    redis = redisClient;
+  } catch (e) {
+    console.warn("Failed to initialize Redis client:", e);
+  }
 }
 
 export async function redisCount(prefix: string) {

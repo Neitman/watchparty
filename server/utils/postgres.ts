@@ -1,14 +1,38 @@
 import { Client, type QueryResult } from "pg";
 import config from "../config.ts";
 
+const useSsl =
+  config.DATABASE_URL?.includes("sslmode=disable") ||
+  config.DATABASE_URL?.includes("localhost") ||
+  config.DATABASE_URL?.includes("127.0.0.1")
+    ? false
+    : { rejectUnauthorized: false };
+
 export let postgres: Client | undefined = undefined;
-if (config.DATABASE_URL) {
-  postgres = new Client({
-    connectionString: config.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
-  });
-  postgres.connect();
+
+async function connectPostgres() {
+  if (!config.DATABASE_URL) return;
+  try {
+    const client = new Client({
+      connectionString: config.DATABASE_URL,
+      ssl: useSsl,
+    });
+    client.on("error", (err) => {
+      console.warn("Postgres connection error:", err.message);
+      postgres = undefined;
+      setTimeout(connectPostgres, 5000);
+    });
+    await client.connect();
+    postgres = client;
+    console.log("Connected to Postgres database.");
+  } catch (err: any) {
+    console.warn("Failed to connect to Postgres:", err.message);
+    postgres = undefined;
+    setTimeout(connectPostgres, 5000);
+  }
 }
+
+connectPostgres();
 
 /**
  * Use this if we need a new connection instead of sharing.
@@ -21,7 +45,7 @@ export function newPostgres() {
   }
   const postgres = new Client({
     connectionString: config.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
+    ssl: useSsl,
   });
   postgres.connect();
   return postgres;

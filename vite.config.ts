@@ -21,5 +21,21 @@ export default {
           }
         : null,
     allowedHosts: true,
+    proxy: {
+      "/createRoom": "http://localhost:8080",
+      "/resolveShard": "http://localhost:8080",
+      "/resolveRoom": "http://localhost:8080",
+      "/metadata": "http://localhost:8080",
+      "/listRooms": "http://localhost:8080",
+      "/ping": "http://localhost:8080",
+      "/youtube": "http://localhost:8080",
+      "/youtubePlaylist": "http://localhost:8080",
+      "/subtitle": "http://localhost:8080",
+      "/generateName": "http://localhost:8080",
+      "/socket.io": {
+        target: "http://localhost:8080",
+        ws: true,
+      },
+    },
   },
 };

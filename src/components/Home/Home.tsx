@@ -133,17 +133,10 @@ const Feature = ({
   title: string;
 }) => {
   return (
-    <div
-      style={{
-        display: "flex",
-        flex: "1 1 0px",
-        flexDirection: "column",
-        alignItems: "center",
-        padding: "10px",
-        minWidth: "180px",
-      }}
-    >
-      <Icon size={80} />
+    <div className={styles.featureCard}>
+      <div className={styles.iconWrapper}>
+        <Icon size={36} />
+      </div>
       <h4 className={styles.featureTitle}>{title}</h4>
       <div className={styles.featureText}>{text}</div>
     </div>
@@ -171,10 +164,10 @@ export const Hero = ({
         style={{ flexDirection: color === "green" ? "row-reverse" : undefined }}
         className={styles.heroInner}
       >
-        <div style={{ padding: "30px", flex: "1 1 0" }}>
+        <div style={{ padding: "20px", flex: "1 1 0" }}>
           <div className={styles.heroText}>{heroText}</div>
           <div className={styles.subText}>{subText}</div>
-          <div className={styles.subText}>{subText2}</div>
+          {subText2 && <div className={styles.subText}>{subText2}</div>}
           {action}
         </div>
         <div
@@ -184,7 +177,7 @@ export const Hero = ({
         >
           <img
             alt="hero"
-            style={{ width: "100%", borderRadius: "10px" }}
+            className={styles.heroImage}
             src={image}
           />
         </div>

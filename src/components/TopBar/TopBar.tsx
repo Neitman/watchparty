@@ -14,7 +14,6 @@ import config from "../../config";
 import {
   IconBrandDiscord,
   IconBrandFacebookFilled,
-  IconBrandGithub,
   IconBrandGoogleFilled,
   IconCirclePlusFilled,
   IconDatabase,
@@ -29,25 +28,44 @@ export async function createRoom(
   openNewTab: boolean | undefined,
   video: string = "",
 ) {
-  const uid = user?.uid;
-  const token = await user?.getIdToken();
-  const response = await fetch(serverPath + "/createRoom", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      uid,
-      token,
-      video,
-    }),
-  });
-  const data = await response.json();
-  const { name } = data;
-  if (openNewTab) {
-    window.open("/watch" + name);
-  } else {
-    window.location.assign("/watch" + name);
+  try {
+    let token: string | undefined = undefined;
+    if (user) {
+      try {
+        token = await user.getIdToken();
+      } catch (e) {
+        console.warn("Could not retrieve user ID token:", e);
+      }
+    }
+    const uid = user?.uid;
+    const response = await fetch(serverPath + "/createRoom", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        uid,
+        token,
+        video,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`Server returned status code ${response.status}`);
+    }
+    const data = await response.json();
+    const { name } = data;
+    if (!name) {
+      throw new Error("Invalid response from server: room name missing");
+    }
+    const roomPath = name.startsWith("/") ? name : "/" + name;
+    if (openNewTab) {
+      window.open("/watch" + roomPath);
+    } else {
+      window.location.assign("/watch" + roomPath);
+    }
+  } catch (e: any) {
+    console.error("Failed to create room:", e);
+    alert("Could not create room. Please try again. (" + (e.message || e) + ")");
   }
 }
 
@@ -63,6 +81,7 @@ export const NewRoomButton = (props: {
     <Button
       size={props.size}
       onClick={onClick}
+      className={styles.newRoomBtn}
       leftSection={<IconCirclePlusFilled />}
     >
       New Room
@@ -75,11 +94,29 @@ type SignInButtonProps = {};
 export class SignInButton extends React.Component<SignInButtonProps> {
   static contextType = MetadataContext;
   declare context: React.ContextType<typeof MetadataContext>;
-  public state = { isLoginOpen: false, isProfileOpen: false, userImage: null };
+  public state = {
+    isLoginOpen: false,
+    isProfileOpen: false,
+    userImage: null as string | null,
+    loadedUid: null as string | null,
+  };
 
-  async componentDidUpdate(prevProps: SignInButtonProps) {
-    if (this.context.user && !this.state.userImage) {
-      this.setState({ userImage: await getUserImage(this.context.user) });
+  async componentDidMount() {
+    if (this.context.user) {
+      const userImage = await getUserImage(this.context.user);
+      this.setState({ userImage, loadedUid: this.context.user.uid });
+    }
+  }
+
+  async componentDidUpdate() {
+    const currentUid = this.context.user?.uid ?? null;
+    if (currentUid !== this.state.loadedUid) {
+      if (this.context.user) {
+        const userImage = await getUserImage(this.context.user);
+        this.setState({ userImage, loadedUid: currentUid });
+      } else {
+        this.setState({ userImage: null, loadedUid: null });
+      }
     }
   }
 
@@ -137,30 +174,50 @@ export class ListRoomsButton extends React.Component<{}> {
 
   refreshRooms = async () => {
     if (this.context.user) {
-      const token = await this.context.user.getIdToken();
-      const response = await fetch(
-        serverPath + `/listRooms?uid=${this.context.user?.uid}&token=${token}`,
-      );
-      this.setState({ rooms: await response.json() });
+      try {
+        const token = await this.context.user.getIdToken();
+        const response = await fetch(
+          serverPath + `/listRooms?uid=${this.context.user?.uid}&token=${token}`,
+        );
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data)) {
+            this.setState({ rooms: data });
+          } else {
+            this.setState({ rooms: [] });
+          }
+        } else {
+          this.setState({ rooms: [] });
+        }
+      } catch (e) {
+        console.warn("Failed to fetch rooms:", e);
+        this.setState({ rooms: [] });
+      }
     }
   };
 
   deleteRoom = async (roomId: string) => {
     if (this.context.user) {
-      const token = await this.context.user.getIdToken();
-      await fetch(
-        serverPath +
-          `/deleteRoom?uid=${this.context.user?.uid}&token=${token}&roomId=${roomId}`,
-        { method: "DELETE" },
-      );
-      this.setState({
-        rooms: this.state.rooms.filter((room) => room.roomId !== roomId),
-      });
-      this.refreshRooms();
+      try {
+        const token = await this.context.user.getIdToken();
+        await fetch(
+          serverPath +
+            `/deleteRoom?uid=${this.context.user?.uid}&token=${token}&roomId=${roomId}`,
+          { method: "DELETE" },
+        );
+        const rooms = Array.isArray(this.state.rooms)
+          ? this.state.rooms.filter((room) => room.roomId !== roomId)
+          : [];
+        this.setState({ rooms });
+        this.refreshRooms();
+      } catch (e) {
+        console.warn("Failed to delete room:", e);
+      }
     }
   };
 
   render() {
+    const rooms = Array.isArray(this.state.rooms) ? this.state.rooms : [];
     return (
       <Menu>
         <Menu.Target>
@@ -173,10 +230,10 @@ export class ListRoomsButton extends React.Component<{}> {
           </Button>
         </Menu.Target>
         <Menu.Dropdown>
-          {this.state.rooms.length === 0 && (
+          {rooms.length === 0 && (
             <Menu.Item disabled>You have no permanent rooms.</Menu.Item>
           )}
-          {this.state.rooms.map((room: any) => {
+          {rooms.map((room: any) => {
             return (
               <Menu.Item
                 key={room.roomId}
@@ -231,50 +288,10 @@ export const TopBar = (props: {
   const subscribeButton = <SubscribeButton />;
   return (
     <React.Fragment>
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          padding: "4px 8px",
-          rowGap: "8px",
-        }}
-      >
-        <a href="/" style={{ display: "flex" }}>
-          <img style={{ width: "56px", height: "56px" }} src="/logo192.png" />
-          {/* <div
-              style={{
-                height: '48px',
-                width: '48px',
-                marginRight: '10px',
-                borderRadius: '50%',
-                position: 'relative',
-                backgroundColor: '#' + colorMappings.blue,
-              }}
-            >
-              <Icon
-                inverted
-                name="film"
-                size="large"
-                style={{
-                  position: 'absolute',
-                  top: 8,
-                  width: '100%',
-                  margin: '0 auto',
-                }}
-              />
-              <Icon
-                inverted
-                name="group"
-                size="large"
-                color="green"
-                style={{
-                  position: 'absolute',
-                  bottom: 8,
-                  width: '100%',
-                  margin: '0 auto',
-                }}
-              />
-            </div> */}
+      <div className={styles.topBarContainer}>
+        <a href="/" className={styles.logoWrapper}>
+          <img className={styles.logoImg} src="/logo192.png" alt="WatchParty" />
+          <span className={styles.brandTitle}>WatchParty</span>
         </a>
         {props.roomTitle || props.roomDescription ? (
           <div
@@ -288,8 +305,8 @@ export const TopBar = (props: {
           >
             <div
               style={{
-                fontSize: "30px",
-                lineHeight: "30px",
+                fontSize: "24px",
+                lineHeight: "28px",
                 color: props.roomTitleColor || softWhite,
                 fontWeight: 700,
                 letterSpacing: 1,
@@ -301,42 +318,7 @@ export const TopBar = (props: {
               {props.roomDescription}
             </Text>
           </div>
-        ) : (
-          <React.Fragment>
-            <a href="/" style={{ display: "flex", textDecoration: "none" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                }}
-              >
-                <div
-                  style={{
-                    textTransform: "uppercase",
-                    fontWeight: 700,
-                    color: "#2185d0",
-                    fontSize: "30px",
-                    lineHeight: "30px",
-                  }}
-                >
-                  Watch
-                </div>
-                <div
-                  style={{
-                    textTransform: "uppercase",
-                    fontWeight: 700,
-                    color: "#21ba45",
-                    fontSize: "30px",
-                    lineHeight: "30px",
-                    marginLeft: "auto",
-                  }}
-                >
-                  Party
-                </div>
-              </div>
-            </a>
-          </React.Fragment>
-        )}
+        ) : null}
         <Announce />
         <div
           className={appStyles.mobileStack}
@@ -365,17 +347,6 @@ export const TopBar = (props: {
               title="Discord"
             >
               <IconBrandDiscord />
-            </ActionIcon>
-            <ActionIcon
-              component="a"
-              color="gray"
-              size="lg"
-              href="https://github.com/howardchung/watchparty"
-              target="_blank"
-              rel="noopener noreferrer"
-              title="GitHub"
-            >
-              <IconBrandGithub />
             </ActionIcon>
           </div>
           {!props.hideNewRoom && <NewRoomButton openNewTab />}

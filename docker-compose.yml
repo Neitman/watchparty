@@ -1,0 +1,30 @@
+services:
+
+  # Optional Postgres Database for Room Persistence
+  postgres:
+    image: postgres:15-alpine
+    container_name: watchparty_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: watchparty
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/1_schema.sql:ro
+
+  # Optional Redis for Metrics & Caching
+  redis:
+    image: redis:7-alpine
+    container_name: watchparty_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:

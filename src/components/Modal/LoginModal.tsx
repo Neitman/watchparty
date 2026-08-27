@@ -27,6 +27,10 @@ export class LoginModal extends React.Component<{
   };
 
   emailSignIn = async (email: string, password: string) => {
+    if (!firebase.apps.length) {
+      this.setState({ error: "Firebase is not configured or initialized." });
+      return;
+    }
     try {
       await firebase.auth().signInWithEmailAndPassword(email, password);
 
@@ -45,13 +49,29 @@ export class LoginModal extends React.Component<{
   // };
 
   facebookSignIn = async () => {
-    const provider = new firebase.auth.FacebookAuthProvider();
-    await firebase.auth().signInWithPopup(provider);
+    if (!firebase.apps.length) {
+      this.setState({ error: "Firebase is not configured or initialized." });
+      return;
+    }
+    try {
+      const provider = new firebase.auth.FacebookAuthProvider();
+      await firebase.auth().signInWithPopup(provider);
+    } catch (e: any) {
+      this.setState({ error: e.message });
+    }
   };
 
   googleSignIn = async () => {
-    const provider = new firebase.auth.GoogleAuthProvider();
-    await firebase.auth().signInWithPopup(provider);
+    if (!firebase.apps.length) {
+      this.setState({ error: "Firebase is not configured or initialized." });
+      return;
+    }
+    try {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await firebase.auth().signInWithPopup(provider);
+    } catch (e: any) {
+      this.setState({ error: e.message });
+    }
   };
 
   render() {
@@ -162,6 +182,10 @@ export class CreateModal extends React.Component<{
   public state = { email: "", password: "", error: "" };
 
   createAccount = async (email: string, password: string) => {
+    if (!firebase.apps.length) {
+      this.setState({ error: "Firebase is not configured or initialized." });
+      return;
+    }
     try {
       await firebase.auth().createUserWithEmailAndPassword(email, password);
     } catch (e: any) {
@@ -217,6 +241,10 @@ export class ResetModal extends React.Component<{
   public state = { email: "", password: "", error: "" };
 
   resetPassword = async () => {
+    if (!firebase.apps.length) {
+      this.setState({ error: "Firebase is not configured or initialized." });
+      return;
+    }
     try {
       await firebase.auth().sendPasswordResetEmail(this.state.email);
       this.props.closeModal();

@@ -1,20 +1,18 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { softWhite } from "../../utils/utils";
+import styles from "./Footer.module.css";
 
 export const Footer = () => (
-  <div
-    style={{
-      margin: "1em",
-      paddingBottom: "1em",
-      fontSize: "14px",
-      color: softWhite,
-    }}
-  >
-    <Link to="/terms">Terms</Link>
-    {" · "}
-    <Link to="/privacy">Privacy</Link>
-    {" · "}
-    <Link to="/faq">FAQ</Link>
-  </div>
+  <footer className={styles.footerContainer}>
+    <div className={styles.linksGroup}>
+      <Link to="/terms" className={styles.footerLink}>Terms</Link>
+      <span>·</span>
+      <Link to="/privacy" className={styles.footerLink}>Privacy</Link>
+      <span>·</span>
+      <Link to="/faq" className={styles.footerLink}>FAQ</Link>
+    </div>
+    <div className={styles.copyright}>
+      © WatchParty — Watch videos together with friends anywhere.
+    </div>
+  </footer>
 );

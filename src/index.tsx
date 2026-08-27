@@ -11,7 +11,7 @@ import { Privacy, Terms, FAQ } from "./components/Pages/Pages";
 import { TopBar } from "./components/TopBar/TopBar";
 import { Footer } from "./components/Footer/Footer";
 import firebase from "firebase/compat/app";
-import "firebase/auth";
+import "firebase/compat/auth";
 import { serverPath, softWhite } from "./utils/utils";
 import { Create } from "./components/Create/Create";
 import { Discord } from "./components/Discord/Discord";
@@ -22,13 +22,22 @@ import { createTheme, MantineProvider } from "@mantine/core";
 const theme = createTheme({
   /** Your theme override here */
   white: softWhite,
+  fontFamily: "'Outfit', 'Plus Jakarta Sans', sans-serif",
+  primaryColor: "indigo",
+  defaultRadius: "md",
 });
 
 const Debug = lazy(() => import("./components/Debug/Debug"));
 
 const firebaseConfig = config.VITE_FIREBASE_CONFIG;
 if (firebaseConfig) {
-  firebase.initializeApp(JSON.parse(firebaseConfig));
+  try {
+    if (!firebase.apps.length) {
+      firebase.initializeApp(JSON.parse(firebaseConfig));
+    }
+  } catch (e) {
+    console.error("Failed to initialize Firebase:", e);
+  }
 }
 
 // Redirect old-style URLs
@@ -37,25 +46,80 @@ if (window.location.hash && window.location.pathname === "/") {
   window.location.href = "/watch/" + hashRoomId;
 }
 
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  ErrorBoundaryState
+> {
+  public state: ErrorBoundaryState = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("Uncaught UI Error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: "40px", textAlign: "center", color: "#fff" }}>
+          <h2>An unexpected error occurred in the UI.</h2>
+          <p style={{ color: "#ff6b6b" }}>
+            {this.state.error?.message || "Unknown Error"}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              padding: "10px 20px",
+              fontSize: "16px",
+              cursor: "pointer",
+              borderRadius: "6px",
+              background: "#4c6ef5",
+              color: "#fff",
+              border: "none",
+            }}
+          >
+            Reload Page
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 class WatchParty extends React.Component {
   public state = DEFAULT_STATE;
   async componentDidMount() {
-    if (firebaseConfig) {
+    if (firebaseConfig && firebase.apps.length > 0) {
       firebase.auth().onAuthStateChanged(async (user: firebase.User | null) => {
         if (user) {
-          // console.log(user);
           this.setState({ user });
-          const token = await user.getIdToken();
-          const response = await window.fetch(
-            serverPath + `/metadata?uid=${user.uid}&token=${token}`,
-          );
-          const data = await response.json();
-          this.setState({
-            isSubscriber: data.isSubscriber,
-            streamPath: data.streamPath,
-            convertPath: data.convertPath,
-            beta: data.beta,
-          });
+          try {
+            const token = await user.getIdToken();
+            const response = await window.fetch(
+              serverPath + `/metadata?uid=${user.uid}&token=${token}`,
+            );
+            if (response.ok) {
+              const data = await response.json();
+              this.setState({
+                isSubscriber: data.isSubscriber,
+                streamPath: data.streamPath,
+                convertPath: data.convertPath,
+                beta: data.beta,
+              });
+            }
+          } catch (e) {
+            console.warn("Failed to fetch user metadata:", e);
+          }
+        } else {
+          this.setState({ user: null });
         }
       });
     } else {
@@ -70,67 +134,69 @@ class WatchParty extends React.Component {
       // <React.StrictMode>
       <MantineProvider theme={theme} forceColorScheme="dark">
         <MetadataContext.Provider value={this.state}>
-          <BrowserRouter>
-            <Route
-              path="/"
-              exact
-              render={(props) => {
-                return (
-                  <React.Fragment>
-                    <TopBar hideNewRoom />
-                    <Home />
-                    <Footer />
-                  </React.Fragment>
-                );
-              }}
-            />
-            <Route
-              path="/create"
-              exact
-              render={() => {
-                return <Create />;
-              }}
-            />
-            <Route
-              path="/watch/:roomId"
-              exact
-              render={(props) => {
-                return <App urlRoomId={props.match.params.roomId} />;
-              }}
-            />
-            <Route
-              path="/r/:vanity"
-              exact
-              render={(props) => {
-                return <App vanity={props.match.params.vanity} />;
-              }}
-            />
-            <Route path="/terms">
-              <TopBar />
-              <Terms />
-              <Footer />
-            </Route>
-            <Route path="/privacy">
-              <TopBar />
-              <Privacy />
-              <Footer />
-            </Route>
-            <Route path="/faq">
-              <TopBar />
-              <FAQ />
-              <Footer />
-            </Route>
-            <Route path="/discord/auth" exact>
-              <Discord />
-            </Route>
-            <Route path="/debug">
-              <TopBar />
-              <Suspense fallback={null}>
-                <Debug />
-              </Suspense>
-              <Footer />
-            </Route>
-          </BrowserRouter>
+          <ErrorBoundary>
+            <BrowserRouter>
+              <Route
+                path="/"
+                exact
+                render={(props) => {
+                  return (
+                    <React.Fragment>
+                      <TopBar hideNewRoom />
+                      <Home />
+                      <Footer />
+                    </React.Fragment>
+                  );
+                }}
+              />
+              <Route
+                path="/create"
+                exact
+                render={() => {
+                  return <Create />;
+                }}
+              />
+              <Route
+                path="/watch/:roomId"
+                exact
+                render={(props) => {
+                  return <App urlRoomId={props.match.params.roomId} />;
+                }}
+              />
+              <Route
+                path="/r/:vanity"
+                exact
+                render={(props) => {
+                  return <App vanity={props.match.params.vanity} />;
+                }}
+              />
+              <Route path="/terms">
+                <TopBar />
+                <Terms />
+                <Footer />
+              </Route>
+              <Route path="/privacy">
+                <TopBar />
+                <Privacy />
+                <Footer />
+              </Route>
+              <Route path="/faq">
+                <TopBar />
+                <FAQ />
+                <Footer />
+              </Route>
+              <Route path="/discord/auth" exact>
+                <Discord />
+              </Route>
+              <Route path="/debug">
+                <TopBar />
+                <Suspense fallback={null}>
+                  <Debug />
+                </Suspense>
+                <Footer />
+              </Route>
+            </BrowserRouter>
+          </ErrorBoundary>
         </MetadataContext.Provider>
       </MantineProvider>
       // </React.StrictMode>

@@ -40,6 +40,13 @@ if (process.env.NODE_ENV === "development") {
   );
 }
 
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
+});
+
 const releaseInterval = 5 * 60 * 1000;
 const app = express();
 let server = null as https.Server | http.Server | null;
@@ -292,41 +299,46 @@ app.get("/youtubePlaylist/:playlistId", async (req, res) => {
 });
 
 app.post("/createRoom", async (req, res) => {
-  const genName = () => "/" + makeRoomName(config.SHARD);
-  let name = genName();
-  console.log("createRoom: ", name);
-  const newRoom = new Room(io, name);
-  if (postgres) {
-    const now = new Date();
-    const roomObj = {
-      roomId: newRoom.roomId,
-      lastUpdateTime: now,
-      creationTime: now,
-    };
-    try {
-      await insertObject(postgres, "room", roomObj);
-    } catch (e) {
-      redisCount("createRoomError");
-      throw e;
+  try {
+    const genName = () => "/" + makeRoomName(config.SHARD);
+    let name = genName();
+    console.log("createRoom: ", name);
+    const newRoom = new Room(io, name);
+    if (postgres) {
+      const now = new Date();
+      const roomObj = {
+        roomId: newRoom.roomId,
+        lastUpdateTime: now,
+        creationTime: now,
+      };
+      try {
+        await insertObject(postgres, "room", roomObj);
+      } catch (e) {
+        redisCount("createRoomError");
+        console.error("Error inserting room into postgres:", e);
+      }
     }
-  }
-  const decoded = await validateUserToken(req.body?.uid, req.body?.token);
-  newRoom.creator = decoded?.email;
-  const preload = (req.body?.video || "").slice(0, 20000);
-  if (preload) {
-    redisCount("createRoomPreload");
-    newRoom.video = preload;
-    newRoom.paused = true;
-    await newRoom.saveRoom();
-  }
-  const prePlaylist = Array.isArray(req.body?.playlist) && req.body?.playlist;
-  if (prePlaylist) {
-    for (let item of req.body.playlist) {
-      newRoom.playlistAdd(null, item);
+    const decoded = await validateUserToken(req.body?.uid, req.body?.token);
+    newRoom.creator = decoded?.email;
+    const preload = (req.body?.video || "").slice(0, 20000);
+    if (preload) {
+      redisCount("createRoomPreload");
+      newRoom.video = preload;
+      newRoom.paused = true;
+      await newRoom.saveRoom();
     }
+    const prePlaylist = Array.isArray(req.body?.playlist) && req.body?.playlist;
+    if (prePlaylist) {
+      for (let item of req.body.playlist) {
+        newRoom.playlistAdd(null, item);
+      }
+    }
+    rooms.set(name, newRoom);
+    res.json({ name });
+  } catch (e) {
+    console.error("Error in /createRoom:", e);
+    res.status(500).json({ error: "Failed to create room" });
   }
-  rooms.set(name, newRoom);
-  res.json({ name });
 });
 
 app.post("/checkoutSub", async (req, res) => {
@@ -790,11 +802,15 @@ async function minuteMetrics() {
     users: io.engine.clientsCount,
     vbWaiting,
   };
-  await redis?.setex(
-    `shardMetrics:${config.SHARD ?? 0}`,
-    120,
-    JSON.stringify(obj),
-  );
+  try {
+    await redis?.setex(
+      `shardMetrics:${config.SHARD ?? 0}`,
+      120,
+      JSON.stringify(obj),
+    );
+  } catch (e) {
+    // Ignore metric reporting errors if Redis is offline
+  }
 }
 
 function computeOpenSubtitlesHash(first: Buffer, last: Buffer, size: number) {
