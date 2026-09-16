@@ -3,7 +3,6 @@ import { Button, Stepper } from "@mantine/core";
 import {
   IconBrandDiscordFilled,
   IconBrandYoutubeFilled,
-  IconBrowser,
   IconFile,
   IconLink,
   IconList,
@@ -33,11 +32,6 @@ export const Home = () => {
           image={"/screenshot4.png"}
         />
         <div className={styles.featureSection}>
-          <Feature
-            Icon={IconBrowser}
-            title={`VBrowser`}
-            text="Watch together on a virtual browser running in the cloud."
-          />
           <Feature
             Icon={IconBrandYoutubeFilled}
             title={`YouTube`}

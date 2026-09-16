@@ -58,15 +58,7 @@ const Debug = () => {
         }}
       >
         {Object.keys(state.current).map((k) => {
-          if (k === "vmManagerStats") {
-            return (
-              <div style={{ overflow: "auto" }}>
-                <pre style={{ fontSize: 12 }} key={k}>
-                  {JSON.stringify(state.current[k], null, 2)}
-                </pre>
-              </div>
-            );
-          } else if (Array.isArray(state.current[k])) {
+          if (Array.isArray(state.current[k])) {
             // One column table
             return (
               <div

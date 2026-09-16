@@ -1,4 +1,3 @@
-import type { AssignedVM } from "../vm/base.ts";
 import { postgres } from "./postgres.ts";
 import os from "node:os";
 import { getRedisCountDay, getRedisCountDayDistinct, redis } from "./redis.ts";
@@ -25,8 +24,6 @@ export async function getStats() {
 
   // Count these from postgres data
   let currentHttp = 0;
-  let currentVBrowser = 0;
-  let currentVBrowserLarge = 0;
   let currentScreenShare = 0;
   let currentFileShare = 0;
   const currentRoomSizes: Record<string, number> = {};
@@ -44,12 +41,11 @@ export async function getStats() {
     password: string;
     video: string;
     videoTS: number;
-    vBrowser: AssignedVM;
     creator: string;
     lock: string;
   }>(
     `SELECT "roomId", "creationTime", "lastUpdateTime", vanity, "isSubRoom", "roomTitle", "roomDescription", "mediaPath", owner, password,
-    data->'video' as video, data->'videoTS' as "videoTS", data->'vBrowser' as "vBrowser", data->'creator' as creator, data->'lock' as lock
+    data->'video' as video, data->'videoTS' as "videoTS", data->'creator' as creator, data->'lock' as lock
     FROM room
     WHERE "lastUpdateTime" > NOW() - INTERVAL '7 day'
     AND length(data->>'video') > 0
@@ -57,13 +53,7 @@ export async function getStats() {
   );
   const currentRoomData = await Promise.all(
     (result?.rows ?? []).map(async (dbRoom) => {
-      const vBrowser = dbRoom.vBrowser;
-      if (vBrowser) {
-        currentVBrowser += 1;
-      }
-      if (vBrowser?.large) {
-        currentVBrowserLarge += 1;
-      }
+
       const rosterLength = Number(
         await redis?.get(`roomCounts:${dbRoom.roomId}`),
       );
@@ -89,8 +79,6 @@ export async function getStats() {
         roomTitle: dbRoom.roomTitle || undefined,
         roomDescription: dbRoom.roomDescription || undefined,
         mediaPath: dbRoom.mediaPath || undefined,
-        vBrowser,
-        vBrowserElapsed: vBrowser?.assignTime && now - vBrowser?.assignTime,
         lock: dbRoom.lock || undefined,
         creator: dbRoom.creator || undefined,
         rosterLength,
@@ -137,27 +125,7 @@ export async function getStats() {
   const deleteAccounts = await getRedisCountDay("deleteAccount");
   const chatMessages = await getRedisCountDay("chatMessages");
   const addReactions = await getRedisCountDay("addReaction");
-  const hetznerApiRemaining = Number(await redis?.get("hetznerApiRemaining"));
-  const vBrowserStarts = await getRedisCountDay("vBrowserStarts");
-  const vBrowserLaunches = await getRedisCountDay("vBrowserLaunches");
-  const vBrowserFails = await getRedisCountDay("vBrowserFails");
-  const vBrowserStagingFails = await getRedisCountDay("vBrowserStagingFails");
-  const vBrowserReimages = await getRedisCountDay("vBrowserReimage");
-  const vBrowserCleanups = await getRedisCountDay("vBrowserCleanup");
-  const vBrowserStopTimeout = await getRedisCountDay(
-    "vBrowserTerminateTimeout",
-  );
-  const vBrowserStopEmpty = await getRedisCountDay("vBrowserTerminateEmpty");
-  const vBrowserStopManual = await getRedisCountDay("vBrowserTerminateManual");
-  const vBrowserStartMS = await redis?.lrange("vBrowserStartMS", 0, -1);
-  const vBrowserStageRetries = await redis?.lrange(
-    "vBrowserStageRetries",
-    0,
-    -1,
-  );
-  const vBrowserStageFails = await redis?.lrange("vBrowserStageFails", 0, -1);
-  const vBrowserSessionMS = await redis?.lrange("vBrowserSessionMS", 0, -1);
-  // const vBrowserVMLifetime = await redis?.lrange('vBrowserVMLifetime', 0, -1);
+
   const proxyReqs = await getRedisCountDay("proxyReqs");
   const urlStarts = await getRedisCountDay("urlStarts");
   const streamStarts = await getRedisCountDay("streamStarts");
@@ -175,60 +143,9 @@ export async function getStats() {
   const subDownloadsOS = await getRedisCountDay("subDownloadsOS");
   const subSearchesOS = await getRedisCountDay("subSearchesOS");
   const youtubeSearch = await getRedisCountDay("youtubeSearch");
-  const vBrowserClientIDsCard = await redis?.zcard("vBrowserClientIDs");
-  const vBrowserUIDsCard = await redis?.zcard("vBrowserUIDs");
   const createRoomPreloads = await getRedisCountDay("createRoomPreload");
 
-  const vBrowserClientIDs = altArrayToObject(
-    await redis?.zrevrangebyscore(
-      "vBrowserClientIDs",
-      "+inf",
-      "0",
-      "WITHSCORES",
-      "LIMIT",
-      0,
-      20,
-    ),
-  );
-  const vBrowserUIDs = altArrayToObject(
-    await redis?.zrevrangebyscore(
-      "vBrowserUIDs",
-      "+inf",
-      "0",
-      "WITHSCORES",
-      "LIMIT",
-      0,
-      20,
-    ),
-  );
-  const vBrowserClientIDMinutes = altArrayToObject(
-    await redis?.zrevrangebyscore(
-      "vBrowserClientIDMinutes",
-      "+inf",
-      "0",
-      "WITHSCORES",
-      "LIMIT",
-      0,
-      20,
-    ),
-  );
-  const vBrowserUIDMinutes = altArrayToObject(
-    await redis?.zrevrangebyscore(
-      "vBrowserUIDMinutes",
-      "+inf",
-      "0",
-      "WITHSCORES",
-      "LIMIT",
-      0,
-      20,
-    ),
-  );
-
-  // Fetch VM stats from vmworker
-  const resp = await fetch(
-    "http://localhost:" + config.VMWORKER_PORT + "/stats",
-  );
-  const vmManagerStats = await resp.json();
+  const vmManagerStats = {};
 
   return {
     ...shardMetrics,
@@ -236,8 +153,6 @@ export async function getStats() {
     counts: {
       currentUsers,
       currentVideoChat,
-      currentVBrowser,
-      currentVBrowserLarge,
       currentHttp,
       currentScreenShare,
       currentFileShare,
@@ -268,33 +183,9 @@ export async function getStats() {
       videoChatStarts,
       connectStarts,
       connectStartsDistinct,
-      hetznerApiRemaining,
-      vBrowserStarts,
-      vBrowserLaunches,
-      vBrowserFails,
-      vBrowserStagingFails,
-      vBrowserReimages,
-      vBrowserCleanups,
-      vBrowserStopManual,
-      vBrowserStopEmpty,
-      vBrowserStopTimeout,
-      vBrowserClientIDsCard,
-      vBrowserUIDsCard,
     },
-    // Stats object from vmWorker (render as JSON)
-    vmManagerStats,
     // Array of room data (render as JSON)
     currentRoomData,
-    // Arrays of last values (render as one column table)
-    vBrowserStartMS,
-    vBrowserStageRetries,
-    vBrowserStageFails,
-    vBrowserSessionMS,
-    // Maps of vbrowser users
-    vBrowserClientIDs,
-    vBrowserClientIDMinutes,
-    vBrowserUIDs,
-    vBrowserUIDMinutes,
   };
 }
 

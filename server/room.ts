@@ -4,7 +4,6 @@ import { Server, Socket } from "socket.io";
 import { getUser, validateUserToken } from "./utils/firebase.ts";
 import { redis, redisCount, redisCountDistinct } from "./utils/redis.ts";
 import { getIsSubscriberByEmail } from "./utils/stripe.ts";
-import { type AssignedVM } from "./vm/base.ts";
 import { getStartOfDay } from "./utils/time.ts";
 import { postgres, updateObject, upsertObject } from "./utils/postgres.ts";
 import {
@@ -15,20 +14,6 @@ import {
 //@ts-expect-error
 import twitch from "twitch-m3u8";
 import { type QueryResult } from "pg";
-import { Docker } from "./vm/docker.ts";
-
-// Stateless pool instance to use for VMs if full management isn't needed
-let stateless: Docker | undefined = undefined;
-if (!config.VM_MANAGER_CONFIG) {
-  stateless = new Docker({
-    provider: "Docker",
-    isLarge: false,
-    region: "US",
-    limitSize: 0,
-    minSize: 0,
-    hostname: config.DOCKER_VM_HOST,
-  });
-}
 
 // Extend the interface
 declare module "socket.io" {
@@ -50,8 +35,7 @@ export class Room {
   private chat: ChatMessage[] = [];
   private nameMap: StringDict = {};
   private pictureMap: StringDict = {};
-  public vBrowser: AssignedVM | undefined = undefined;
-  public creator: string | undefined = undefined; // email of the user who created the room (just used for stats)
+  public creator: string | undefined = undefined;
   public lock: string | undefined = undefined; // uid of the user who locked the room
   public playlist: PlaylistVideo[] = [];
 
@@ -66,18 +50,6 @@ export class Room {
   public isChatDisabled: boolean | undefined = undefined;
   public lastUpdateTime: Date = new Date();
   private preventTSUpdate = false;
-  // Not really a queue since there's no ordering, we just retry as long as this is set
-  // If we want a real queue then we need external processing of the jobs and a way to update the room from outside
-  public vBrowserQueue:
-    | {
-        roomId: string;
-        queueTime: Date;
-        isLarge: boolean;
-        region: string;
-        uid: string;
-        clientId: string;
-      }
-    | undefined = undefined;
 
   constructor(
     io: Server,
@@ -258,7 +230,16 @@ export class Room {
         }
       });
       socket.on("CMD:host", (data: unknown) => {
-        validateLock() && this.startHosting(socket, String(data));
+        if (typeof data === "object" && data !== null && "url" in data) {
+          const payload = data as { url: string; force?: boolean };
+          validateLock() &&
+            this.startHosting(socket, String(payload.url), Boolean(payload.force));
+        } else {
+          validateLock() && this.startHosting(socket, String(data), false);
+        }
+      });
+      socket.on("CMD:forceHost", (data: unknown) => {
+        validateLock() && this.startHosting(socket, String(data), true);
       });
       socket.on("CMD:play", () => {
         validateLock() && this.playVideo(socket);
@@ -299,15 +280,6 @@ export class Room {
         this.setUserMute(socket, data),
       );
       socket.on("CMD:leaveScreenShare", () => this.leaveScreenSharing(socket));
-      socket.on("CMD:startVBrowser", (data: unknown) => {
-        validateLock() && this.startVBrowser(socket, data);
-      });
-      socket.on("CMD:stopVBrowser", () => {
-        validateLock() && this.stopVBrowser();
-      });
-      socket.on("CMD:changeController", (data: unknown) => {
-        validateLock() && this.changeController(String(data));
-      });
       socket.on("CMD:subtitle", (data: unknown) => {
         validateLock() && this.addSubtitles(String(data));
       });
@@ -381,7 +353,6 @@ export class Room {
       chat: this.chat,
       nameMap: abbrNameMap,
       pictureMap: abbrPictureMap,
-      vBrowser: this.vBrowser,
       lock: this.lock,
       creator: this.creator,
       playlist: this.playlist,
@@ -407,9 +378,6 @@ export class Room {
     }
     if (roomObj.pictureMap) {
       this.pictureMap = roomObj.pictureMap;
-    }
-    if (roomObj.vBrowser) {
-      this.vBrowser = roomObj.vBrowser;
     }
     if (roomObj.lock) {
       this.lock = roomObj.lock;
@@ -488,49 +456,8 @@ export class Room {
       subtitle: this.subtitle,
       playbackRate: this.playbackRate,
       paused: this.paused,
-      isVBrowserLarge: Boolean(this.vBrowser && this.vBrowser.large),
-      controller: this.vBrowser?.controllerClient,
       loop: this.loop,
     };
-  };
-
-  public stopVBrowserInternal = async () => {
-    const assignTime = this.vBrowser && this.vBrowser.assignTime;
-    const id = this.vBrowser?.id;
-    const provider = this.vBrowser?.provider;
-    const isLarge = this.vBrowser?.large ?? false;
-    const region = this.vBrowser?.region ?? "";
-    const uid = this.vBrowser?.creatorUID ?? "";
-    this.vBrowser = undefined;
-    this.cmdHost(null, "");
-    // Force a save because this might change in unattended rooms
-    this.lastUpdateTime = new Date();
-    this.saveRoom();
-    if (redis && assignTime) {
-      await redis.lpush("vBrowserSessionMS", Date.now() - assignTime);
-      await redis.ltrim("vBrowserSessionMS", 0, 19);
-    }
-
-    if (id) {
-      try {
-        if (stateless) {
-          await stateless.terminateVM(id);
-        } else {
-          await axios.post(
-            "http://localhost:" + config.VMWORKER_PORT + "/releaseVM",
-            {
-              provider,
-              isLarge,
-              region,
-              id,
-              roomId: this.roomId,
-            },
-          );
-        }
-      } catch (e) {
-        console.warn(e);
-      }
-    }
   };
 
   private cmdHost = (socket: Socket | null, data: string) => {
@@ -555,8 +482,6 @@ export class Room {
     if (data === "") {
       this.playlistNext(null);
     }
-    // The room video is changing so remove room from vbrowser queue
-    this.vBrowserQueue = undefined;
     // Resend the roster (updates screenshare state etc)
     this.io.of(this.roomId).emit("roster", this.getRosterForApp());
   };
@@ -597,14 +522,7 @@ export class Room {
     this.io.of(this.roomId).emit("REC:pictureMap", this.pictureMap);
   };
 
-  private startHosting = async (socket: Socket, data: string) => {
-    if (this.vBrowser) {
-      socket.emit(
-        "errorMessage",
-        `Can't update the video while vbrowser is running`,
-      );
-      return;
-    }
+  private startHosting = async (socket: Socket, data: string, force = false) => {
     redisCount("urlStarts");
     if (config.STREAM_PATH && data?.startsWith(config.STREAM_PATH)) {
       redisCount("streamStarts");
@@ -663,6 +581,11 @@ export class Room {
       } catch (e) {
         console.warn(e);
       }
+    }
+
+    if (this.video && data !== "" && !force) {
+      await this.playlistAdd(socket, data);
+      return;
     }
     this.cmdHost(socket, data);
   };
@@ -1003,162 +926,6 @@ export class Room {
     }
     this.cmdHost(socket, "");
     this.io.of(this.roomId).emit("roster", this.getRosterForApp());
-  };
-
-  private startVBrowser = async (socket: Socket, raw: unknown) => {
-    const data = raw as {
-      options?: { size: string; region: string; provider: string };
-    };
-    if (!data) {
-      socket.emit("errorMessage", "Invalid vBrowser input");
-      return;
-    }
-    const { clientId, uid, isSub } = socket;
-    // these checks are skipped if firebase not provided
-    if (config.FIREBASE_ADMIN_SDK_CONFIG) {
-      const user = await getUser(uid);
-      // Validate verified email if not a third-party auth provider
-      if (
-        user?.providerData[0].providerId === "password" &&
-        !user?.emailVerified
-      ) {
-        socket.emit(
-          "errorMessage",
-          "A verified email is required to start a VBrowser.",
-        );
-        return;
-      }
-
-      // Log the vbrowser creation by uid and clientid
-      if (redis) {
-        const expireTime = getStartOfDay() / 1000 + 86400;
-        if (clientId) {
-          const clientCount = await redis.zincrby(
-            "vBrowserClientIDs",
-            1,
-            clientId,
-          );
-          redis.expireat("vBrowserClientIDs", expireTime);
-          const clientMinutes = await redis.zincrby(
-            "vBrowserClientIDMinutes",
-            1,
-            clientId,
-          );
-          redis.expireat("vBrowserClientIDMinutes", expireTime);
-        }
-        if (uid) {
-          const uidCount = await redis.zincrby("vBrowserUIDs", 1, uid);
-          redis.expireat("vBrowserUIDs", expireTime);
-          const uidMinutes = await redis.zincrby("vBrowserUIDMinutes", 1, uid);
-          redis.expireat("vBrowserUIDMinutes", expireTime);
-          // TODO limit users based on client or uid usage
-        }
-      }
-      // check if the user already has a VM already in postgres
-      if (postgres) {
-        const { rows } = await postgres.query(
-          "SELECT count(1) from vbrowser WHERE uid = $1",
-          [uid],
-        );
-        if (rows[0].count >= 2) {
-          socket.emit(
-            "errorMessage",
-            "There is already an active vBrowser for this user.",
-          );
-          return;
-        }
-      }
-    }
-    let isLarge = false;
-    let region = "";
-    // Check if user is subscriber or firebase not configured, if so allow sub options
-    if (isSub || !config.FIREBASE_ADMIN_SDK_CONFIG) {
-      isLarge = data.options?.size === "large";
-      if (data.options?.region) {
-        region = data.options?.region;
-      }
-    }
-
-    redisCount("vBrowserStarts");
-    this.cmdHost(socket, "vbrowser://");
-    // Put the room in the vbrowser queue
-    this.vBrowserQueue = {
-      roomId: this.roomId,
-      queueTime: new Date(),
-      isLarge,
-      region,
-      uid,
-      clientId,
-    };
-    // Check if a vbrowser is available
-    while (this.vBrowserQueue) {
-      const { queueTime, isLarge, region, uid, roomId, clientId } =
-        this.vBrowserQueue;
-      let assignment: AssignedVM | undefined = undefined;
-      try {
-        if (stateless) {
-          const pass = crypto.randomUUID();
-          const id = await stateless.startVM(pass);
-          assignment = {
-            ...(await stateless.getVM(id)),
-            pass,
-            assignTime: Date.now(),
-          };
-        } else {
-          const { data } = await axios.post<AssignedVM>(
-            "http://localhost:" + config.VMWORKER_PORT + "/assignVM",
-            {
-              isLarge,
-              region,
-              uid,
-              roomId,
-            },
-          );
-          assignment = data;
-        }
-      } catch (e) {
-        console.warn(e);
-      }
-      if (assignment) {
-        this.vBrowser = assignment;
-        this.vBrowser.controllerClient = clientId;
-        this.vBrowser.creatorUID = uid;
-        this.vBrowser.creatorClientID = clientId;
-        const assignEnd = Date.now();
-        const assignElapsed = assignEnd - Number(queueTime);
-        await redis?.lpush("vBrowserStartMS", assignElapsed);
-        await redis?.ltrim("vBrowserStartMS", 0, 19);
-        console.log(
-          "[ASSIGN] %s to %s in %s",
-          assignment.provider + ":" + assignment.id,
-          roomId,
-          assignElapsed + "ms",
-        );
-        this.cmdHost(
-          null,
-          "vbrowser://" + this.vBrowser.pass + "@" + this.vBrowser.host,
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  };
-
-  private stopVBrowser = async () => {
-    if (!this.vBrowser && this.video !== "vbrowser://") {
-      return;
-    }
-    await this.stopVBrowserInternal();
-    redisCount("vBrowserTerminateManual");
-  };
-
-  private changeController = (data: string) => {
-    if (data && data.length > 100) {
-      return;
-    }
-    if (this.vBrowser) {
-      this.vBrowser.controllerClient = data;
-      this.io.of(this.roomId).emit("REC:changeController", data);
-    }
   };
 
   private addSubtitles = async (data: string) => {

@@ -83,33 +83,7 @@ export class SubscribeModal extends React.Component<{
                   <Table.Td>20</Table.Td>
                   <Table.Td>100</Table.Td>
                 </Table.Tr> */}
-            <Table.Tr>
-              <Table.Td>VBrowser Access</Table.Td>
-              <Table.Td>When capacity allows</Table.Td>
-              <Table.Td>Anytime</Table.Td>
-            </Table.Tr>
-            <Table.Tr>
-              <Table.Td>VBrowser Max Resolution</Table.Td>
-              <Table.Td>720p</Table.Td>
-              <Table.Td>1080p</Table.Td>
-            </Table.Tr>
-            <Table.Tr>
-              <Table.Td>VBrowser CPU/RAM</Table.Td>
-              <Table.Td>Standard</Table.Td>
-              <Table.Td>Extra</Table.Td>
-            </Table.Tr>
-            <Table.Tr>
-              <Table.Td>VBrowser Session Length</Table.Td>
-              <Table.Td>3 hours</Table.Td>
-              <Table.Td>24 hours</Table.Td>
-            </Table.Tr>
-            <Table.Tr>
-              <Table.Td>VBrowser Region Selection</Table.Td>
-              <Table.Td></Table.Td>
-              <Table.Td>
-                <IconCheck />
-              </Table.Td>
-            </Table.Tr>
+
             <Table.Tr>
               <Table.Td>
                 Share your screen/file to more viewers with Relay

@@ -19,7 +19,6 @@ import {
 import { deleteUser, validateUserToken } from "./utils/firebase.ts";
 import path from "node:path";
 import { getStartOfDay } from "./utils/time.ts";
-import { getSessionLimitSeconds } from "./vm/utils.ts";
 import { postgres, insertObject, upsertObject } from "./utils/postgres.ts";
 import axios, { isAxiosError } from "axios";
 import crypto from "node:crypto";
@@ -101,15 +100,7 @@ const rooms = new Map<string, Room>();
 setInterval(minuteMetrics, 60 * 1000);
 setInterval(release, releaseInterval);
 setInterval(saveRooms, 1000);
-if (process.env.NODE_ENV === "development") {
-  try {
-    import("./vmWorker.ts");
-    // import('./syncSubs.ts');
-    // import('./timeSeries.ts');
-  } catch (e) {
-    console.error(e);
-  }
-}
+
 
 app.use(cors());
 app.use(bodyParser.json());
@@ -258,11 +249,7 @@ app.get("/stats", async (req, res) => {
 });
 
 app.get("/health/:metric", async (req, res) => {
-  const vmManagerStats = (
-    await axios.get("http://localhost:" + config.VMWORKER_PORT + "/stats")
-  ).data;
-  const result = vmManagerStats[req.params.metric]?.availableVBrowsers?.length;
-  res.status(result ? 200 : 500).json(result);
+  res.status(200).json(true);
 });
 
 app.get("/timeSeries", async (req, res) => {
@@ -416,15 +403,6 @@ app.get("/metadata", async (req, res) => {
   // Has the user ever been a subscriber?
   // const customer = await getCustomerByEmail(decoded.email);
   let isFreePoolFull = false;
-  try {
-    isFreePoolFull = (
-      await axios.get(
-        "http://localhost:" + config.VMWORKER_PORT + "/isFreePoolFull",
-      )
-    ).data.isFull;
-  } catch (e: any) {
-    console.warn("[WARNING]: free pool check failed: %s", e.code);
-  }
   const beta =
     decoded?.email != null &&
     Boolean(config.BETA_USER_EMAILS.split(",").includes(decoded?.email));
@@ -676,7 +654,6 @@ async function saveRooms() {
     Array.from(rooms.entries()).map(async ([key, room]) => {
       if (
         room.roster.length === 0 &&
-        !room.vBrowser &&
         Number(room.lastUpdateTime) < Date.now() - 8 * 60 * 60 * 1000
       ) {
         console.log(
@@ -709,80 +686,11 @@ async function saveRooms() {
 }
 
 async function release() {
-  // Reset VMs in rooms that are:
-  // older than the session limit
-  // assigned to a room with no users
-  const roomArr = Array.from(rooms.values());
-  console.log("[RELEASE] %s rooms in batch", roomArr.length);
-  for (let room of roomArr) {
-    if (room.vBrowser && room.vBrowser.assignTime) {
-      const maxTime = getSessionLimitSeconds(room.vBrowser.large) * 1000;
-      const elapsed = Date.now() - room.vBrowser.assignTime;
-      const ttl = maxTime - elapsed;
-      const isTimedOut = ttl && ttl < releaseInterval;
-      const isAlmostTimedOut = ttl && ttl < releaseInterval * 2;
-      const isRoomEmpty = room.roster.length === 0;
-      const isRoomIdle =
-        Date.now() - Number(room.lastUpdateTime) > 5 * 60 * 1000;
-      if (isTimedOut || (isRoomEmpty && isRoomIdle)) {
-        console.log("[RELEASE] VM in room:", room.roomId);
-        room.stopVBrowserInternal();
-        if (isTimedOut) {
-          room.addChatMessage(null, {
-            id: "",
-            system: true,
-            cmd: "vBrowserTimeout",
-            msg: "",
-          });
-          redisCount("vBrowserTerminateTimeout");
-        } else if (isRoomEmpty) {
-          redisCount("vBrowserTerminateEmpty");
-        }
-      } else if (isAlmostTimedOut) {
-        room.addChatMessage(null, {
-          id: "",
-          system: true,
-          cmd: "vBrowserAlmostTimeout",
-          msg: "",
-        });
-      }
-    }
-    // We want to spread out the jobs over about half the release interval
-    // This gives other jobs some CPU time
-    const waitTime = releaseInterval / 2 / roomArr.length;
-    await new Promise((resolve) => setTimeout(resolve, waitTime));
-  }
 }
 
 async function minuteMetrics() {
   const roomArr = Array.from(rooms.values());
-  let vbWaiting = 0;
   for (let room of roomArr) {
-    if (room.vBrowser && room.vBrowser.id) {
-      // Update the heartbeat
-      await postgres?.query(
-        `UPDATE vbrowser SET "heartbeatTime" = NOW() WHERE "roomId" = $1 and vmid = $2`,
-        [room.roomId, room.vBrowser.id],
-      );
-
-      const expireTime = getStartOfDay() / 1000 + 86400;
-      if (room.vBrowser?.creatorClientID) {
-        await redis?.zincrby(
-          "vBrowserClientIDMinutes",
-          1,
-          room.vBrowser.creatorClientID,
-        );
-        await redis?.expireat("vBrowserClientIDMinutes", expireTime);
-      }
-      if (room.vBrowser?.creatorUID) {
-        await redis?.zincrby(
-          "vBrowserUIDMinutes",
-          1,
-          room.vBrowser?.creatorUID,
-        );
-        await redis?.expireat("vBrowserUIDMinutes", expireTime);
-      }
-    }
     const users = room.roster.length;
     if (users) {
       await redis?.setex(`roomCounts:${room.roomId}`, 120, users);
@@ -792,7 +700,6 @@ async function minuteMetrics() {
         JSON.stringify(room.getRosterForStats()),
       );
     }
-    vbWaiting += room.vBrowserQueue ? 1 : 0;
   }
   // Report shard metrics
   const obj: ShardMetric = {
@@ -800,7 +707,6 @@ async function minuteMetrics() {
     mem: process.memoryUsage().rss,
     roomCount: rooms.size,
     users: io.engine.clientsCount,
-    vbWaiting,
   };
   try {
     await redis?.setex(
